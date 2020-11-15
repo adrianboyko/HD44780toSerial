@@ -39,9 +39,8 @@ void usdxPowerDownISR() {
 void lcdActivityISR() {
   lcdBuffer[idxOfNextLcdWrite] = PORTD.IN;
   idxOfNextLcdWrite = (idxOfNextLcdWrite + 1) & BUFFER_INDEX_MASK;
-  if (idxOfNextLcdWrite == idxOfNextLcdRead) {
-    // Buffer overflowed
-    digitalWrite(LED_BUILTIN, HIGH);
+  if (idxOfNextLcdWrite == idxOfNextLcdRead) { // Buffer overflowed. Alert user by lighting LED.
+    digitalWrite(LED_BUILTIN, HIGH);  // REVIEW: is digitalWrite too slow for ISR?
   }
 }
 
@@ -164,8 +163,12 @@ void loop() {
   attachInterrupt(digitalPinToInterrupt(LCD_POWER_PIN), usdxPowerDownISR, FALLING);
   digitalWrite(LED_BUILTIN, LOW);
 
+  // Will indicate power UP by sending RS=0 DATA=11111111 (i.e. Set DDRAM address to 127, which is invalid)
+  Serial.write(B00100111); // This is RS=0 Nibble=1111
+  Serial.write(B00100111); // This is RS=0 Nibble=1111
+
   // The uSDX is powered on at this point, so do the normal workflow.
-  while (usdxPowerOn) {
+  while (usdxPowerOn || idxOfNextLcdRead != idxOfNextLcdWrite) {  // Second condition allows for power off signal to be sent.
 
     if (idxOfNextLcdRead != idxOfNextLcdWrite) {
       Serial.write(lcdBuffer[idxOfNextLcdRead]);
@@ -186,7 +189,13 @@ void loop() {
       emulateEncoder();
     }
   }  
+
   // uSDX power has been turned off, at this point.
   detachInterrupt(digitalPinToInterrupt(LCD_POWER_PIN));
+
+  // Will indicate power DOWN by sending RS=0 DATA=11111110 (i.e. Set DDRAM address to 126, which is invalid)
+  Serial.write(B00100111); // This is RS=0 Nibble=1111
+  Serial.write(B00100110); // This is RS=0 Nibble=1110
+  
 
 }
