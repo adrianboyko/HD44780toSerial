@@ -164,14 +164,14 @@ void loop() {
   digitalWrite(LED_BUILTIN, LOW);
 
   // Will indicate power UP by sending RS=0 DATA=11111111 (i.e. Set DDRAM address to 127, which is invalid)
-  Serial.write(B00100111); // This is RS=0 Nibble=1111
-  Serial.write(B00100111); // This is RS=0 Nibble=1111
+  Serial.write(markAsLcdByte(B00100111)); // This is RS=0 Nibble=1111
+  Serial.write(markAsLcdByte(B00100111)); // This is RS=0 Nibble=1111
 
   // The uSDX is powered on at this point, so do the normal workflow.
   while (usdxPowerOn || idxOfNextLcdRead != idxOfNextLcdWrite) {  // Second condition allows for power off signal to be sent.
 
     if (idxOfNextLcdRead != idxOfNextLcdWrite) {
-      Serial.write(lcdBuffer[idxOfNextLcdRead]);
+      Serial.write(markAsLcdByte(lcdBuffer[idxOfNextLcdRead]));
       idxOfNextLcdRead = (idxOfNextLcdRead + 1) & BUFFER_INDEX_MASK;
     }
 
@@ -194,8 +194,15 @@ void loop() {
   detachInterrupt(digitalPinToInterrupt(LCD_POWER_PIN));
 
   // Will indicate power DOWN by sending RS=0 DATA=11111110 (i.e. Set DDRAM address to 126, which is invalid)
-  Serial.write(B00100111); // This is RS=0 Nibble=1111
-  Serial.write(B00100110); // This is RS=0 Nibble=1110
+  Serial.write(markAsLcdByte(B00100111)); // This is RS=0 Nibble=1111
+  Serial.write(markAsLcdByte(B00100110)); // This is RS=0 Nibble=1110
   
+}
 
+inline byte markAsLcdByte(byte b) {
+  return b & B01111111;
+}
+
+inline byte markAsCatByte(byte b) {
+  return b | B10000000;
 }
