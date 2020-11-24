@@ -11,6 +11,7 @@ const int LEFT_BUTTON_PIN    = 11;
 const int ENCODER_BUTTON_PIN = 12;
 const int LCD_ENABLE_PIN     =  2; // This is used for EN clocking, i.e. to catch uSDX sending cmd/data to LCD.
 const int LCD_POWER_PIN      =  6; // This will be used to detect uSDX power up and power down.
+const int PUSH_TO_TALK_PIN   =  7; 
 
 const unsigned long BUTTON_CLICK_DURATION = 5;  // milliseconds
 
@@ -19,6 +20,8 @@ const byte CLICK_RIGHT_BUTTON              = 2;
 const byte CLICK_ENCODER_BUTTON            = 3;
 const byte ROTATE_ENCODER_CLOCKWISE        = 4;
 const byte ROTATE_ENCODER_COUNTERCLOCKWISE = 5;
+const byte PUSH_TO_TALK_START              = 6;
+const byte PUSH_TO_TALK_END                = 7;
 
 volatile bool usdxPowerOn = false;
 
@@ -52,7 +55,20 @@ void performInputGesture(byte gesture) {
     case CLICK_ENCODER_BUTTON: startButtonClick(ENCODER_BUTTON_PIN); break;
     case ROTATE_ENCODER_CLOCKWISE: startEncoderRotation(ROT_A_PIN, ROT_B_PIN); break;
     case ROTATE_ENCODER_COUNTERCLOCKWISE: startEncoderRotation(ROT_B_PIN, ROT_A_PIN); break;
+    case PUSH_TO_TALK_START: startPushToTalk(); break;
+    case PUSH_TO_TALK_END: endPushToTalk(); break;
   }
+}
+
+void startPushToTalk() {
+  pinMode(PUSH_TO_TALK_PIN, OUTPUT);
+  digitalWrite(PUSH_TO_TALK_PIN, LOW);
+  gestureInProgress = false;
+}
+
+void endPushToTalk() {
+  pinMode(PUSH_TO_TALK_PIN, INPUT);
+  gestureInProgress = false;
 }
 
 unsigned long timeOfClickStart = 0;
@@ -136,9 +152,12 @@ void setup() {
   pinMode(ENCODER_BUTTON_PIN, INPUT);
   pinMode(ROT_A_PIN,          INPUT);
   pinMode(ROT_B_PIN,          INPUT);
-  
+
   pinMode(LCD_ENABLE_PIN,     INPUT_PULLUP  );
   pinMode(LCD_POWER_PIN,      INPUT_PULLDOWN);
+
+  // This is connected to an input pin on the uSDX, but we'll keep it hi-z except when pulling the uSDX pin low.
+  pinMode(PUSH_TO_TALK_PIN,   INPUT);
  
   Serial.begin(500000);
 
@@ -149,6 +168,14 @@ void setup() {
   // Port D will be used to read the LCD interface   
   PORTD.DIRCLR = B00000000; // Set the entire port to INPUT
 
+  // Flashing LED indicates startup or reset.
+  for (int i = 1; i < 10; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(50);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(50);
+  }
+
 }
 
 void loop() {
@@ -158,7 +185,7 @@ void loop() {
   attachInterrupt(digitalPinToInterrupt(LCD_POWER_PIN), usdxPowerUpISR, RISING);
   while (!usdxPowerOn);
   detachInterrupt(digitalPinToInterrupt(LCD_POWER_PIN));
-  delay(100); // This skips noise from the startup.
+  delay(500); // This skips noise from the startup.
   attachInterrupt(digitalPinToInterrupt(LCD_ENABLE_PIN), lcdActivityISR, FALLING);
   attachInterrupt(digitalPinToInterrupt(LCD_POWER_PIN), usdxPowerDownISR, FALLING);
   digitalWrite(LED_BUILTIN, LOW);
