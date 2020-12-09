@@ -34,9 +34,23 @@ volatile int idxOfNextLcdRead = 0;
 
 bool gestureInProgress = false;
 
-void usdxPowerUpISR() {
-  usdxPowerOn = true;
+
+// Control messages are encoded as invalid "set DDRAM address" commands:
+enum ctrl_msg_t {
+  USDX_POWERED_UP   = B11111111, // Set DDRAM address to 127 (invalid)
+  USDX_POWERED_DOWN = B11111110, // Set DDRAM address to 126 (invalid)
+};
+
+void sendControlMessage(ctrl_msg_t msg) {
+  // NOTE: If the nibble is [B3 B2 B1 B0], send byte [0 0 B3 RS 0 B2 B1 B0]
+  // NOTE: RS will always be 0 for a "set DDRAM address" command.
+  char cMsg = (char)msg;
+  char bits1 = ((B10000000 & cMsg)>>2) | ((B01110000 & cMsg)>>4); 
+  char bits2 = ((B00001000 & cMsg)<<2) | ((B00000111 & cMsg)<<0); 
+  Serial.write(bits1);
+  Serial.write(bits2);
 }
+
 
 void usdxPowerDownISR() {
   usdxPowerOn = false;
@@ -158,7 +172,19 @@ void performInputGesture(byte gesture) {
 }
 
 void doUsdxReset() {
+  digitalWrite(LED_BUILTIN, HIGH);
+  detachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE));
+
+  idxOfNextLcdRead = 0;
+  idxOfNextLcdWrite = 0;
+
   Button::startClick(Pin::USDX_RESET, LOW);
+  delay(1);
+  Button::endClick();
+  delay(1);
+
+  attachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE), lcdActivityISR, FALLING);
+  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void startPushToTalk() {
@@ -219,25 +245,28 @@ void setup() {
 
 void loop() {
 
-  // This waits for the uSDX to power up and then starts watching for lcd activity once the startup noise pass.
-  digitalWrite(LED_BUILTIN, HIGH);
-  attachInterrupt(digitalPinToInterrupt(Pin::LCD_POWER), usdxPowerUpISR, RISING);
-  while (!usdxPowerOn);
-  detachInterrupt(digitalPinToInterrupt(Pin::LCD_POWER));
-  delay(100); // This skips noise from the startup.
+  // The uSDX power *might* be on at this point, e.g. if the Nano has been manually reset.
+  // If so, this waits for the uSDX to power up and then starts watching for lcd activity once the startup noise pass.
+  if (digitalRead(Pin::LCD_POWER) == LOW) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    
+    while (digitalRead(Pin::LCD_POWER) == LOW);
+    delay(100); // This skips noise from the startup.
+    
+    // Will indicate power UP by sending RS=0 DATA=11111111 (i.e. Set DDRAM address to 127, which is invalid)
+    sendControlMessage(USDX_POWERED_UP);
+
+    digitalWrite(LED_BUILTIN, LOW);
+  }
+  usdxPowerOn = true;
   attachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE), lcdActivityISR, FALLING);
   attachInterrupt(digitalPinToInterrupt(Pin::LCD_POWER), usdxPowerDownISR, FALLING);
-  digitalWrite(LED_BUILTIN, LOW);
-
-  // Will indicate power UP by sending RS=0 DATA=11111111 (i.e. Set DDRAM address to 127, which is invalid)
-  Serial.write(markAsLcdByte(B00100111)); // This is RS=0 Nibble=1111
-  Serial.write(markAsLcdByte(B00100111)); // This is RS=0 Nibble=1111
 
   // The uSDX is powered on at this point, so do the normal workflow.
   while (usdxPowerOn || idxOfNextLcdRead != idxOfNextLcdWrite) {  // Second condition allows for power off signal to be sent.
 
     if (idxOfNextLcdRead != idxOfNextLcdWrite) {
-      Serial.write(markAsLcdByte(lcdBuffer[idxOfNextLcdRead]));
+      Serial.write(lcdBuffer[idxOfNextLcdRead]);
       idxOfNextLcdRead = (idxOfNextLcdRead + 1) & BUFFER_INDEX_MASK;
     }
 
@@ -254,21 +283,11 @@ void loop() {
       Encoder::emulate();
     }
   }  
-
   // uSDX power has been turned off, at this point.
+
   detachInterrupt(digitalPinToInterrupt(Pin::LCD_POWER));
   detachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE));
 
-  // Will indicate power DOWN by sending RS=0 DATA=11111110 (i.e. Set DDRAM address to 126, which is invalid)
-  Serial.write(markAsLcdByte(B00100111)); // This is RS=0 Nibble=1111
-  Serial.write(markAsLcdByte(B00100110)); // This is RS=0 Nibble=1110
-  
-}
+  sendControlMessage(USDX_POWERED_DOWN);
 
-inline byte markAsLcdByte(byte b) {
-  return b & B01111111;
-}
-
-inline byte markAsCatByte(byte b) {
-  return b | B10000000;
 }
