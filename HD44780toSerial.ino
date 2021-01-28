@@ -3,15 +3,15 @@ const int BUFFER_SIZE = 1024;
 const int BUFFER_INDEX_MASK = BUFFER_SIZE - 1;
 
 namespace Pin {
-  const int ROT_B          =  8;
-  const int ROT_A          =  9;
-  const int RIGHT_BUTTON   = 10;
-  const int LEFT_BUTTON    = 11;
-  const int ENCODER_BUTTON = 12;
-  const int LCD_ENABLE     =  2; // This is used for EN clocking, i.e. to catch uSDX sending cmd/data to LCD.
+  const int ROT_A          = 18;
+  const int ROT_B          = 19;
+  const int RIGHT_BUTTON   =  3;
+  const int LEFT_BUTTON    =  4;
+  const int ENCODER_BUTTON =  5;
+  const int LCD_ENABLE     =  7; // This is used for EN clocking, i.e. to catch uSDX sending cmd/data to LCD.
   const int LCD_POWER      =  6; // This will be used to detect uSDX power up and power down.
-  const int PUSH_TO_TALK   =  7; 
-  const int USDX_RESET     =  5; // This is connected to the uSDX's reset pin.
+  const int PUSH_TO_TALK   =  2; 
+  const int USDX_RESET     =  13; // This is connected to the uSDX's reset pin.
 }
 
 const unsigned long PULSE_DURATION = 5;  // milliseconds
