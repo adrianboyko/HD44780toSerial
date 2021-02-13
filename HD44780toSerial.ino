@@ -1,6 +1,7 @@
 
 const int BUFFER_SIZE = 1024;
 const int BUFFER_INDEX_MASK = BUFFER_SIZE - 1;
+bool bufferOverflowed = false;
 
 namespace Pin {
   const int ROT_A          = 18;
@@ -8,10 +9,9 @@ namespace Pin {
   const int RIGHT_BUTTON   =  3;
   const int LEFT_BUTTON    =  4;
   const int ENCODER_BUTTON =  5;
-  const int LCD_ENABLE     =  7; // This is used for EN clocking, i.e. to catch uSDX sending cmd/data to LCD.
+  const int LCD_ENABLE     = 20; // This is used for EN clocking, i.e. to catch uSDX sending cmd/data to LCD.
   const int LCD_POWER      =  6; // This will be used to detect uSDX power up and power down.
-  const int PUSH_TO_TALK   =  2; 
-  const int USDX_RESET     =  13; // This is connected to the uSDX's reset pin.
+  const int PUSH_TO_TALK   = 12; 
 }
 
 const unsigned long PULSE_DURATION = 5;  // milliseconds
@@ -35,20 +35,25 @@ volatile int idxOfNextLcdRead = 0;
 bool gestureInProgress = false;
 
 
-// Control messages are encoded as invalid "set DDRAM address" commands:
+// Control messages are encoded as invalid "set DDRAM address" commands.
+// They are invalid because the address is out of range.
 enum ctrl_msg_t {
-  USDX_POWERED_UP   = B11111111, // Set DDRAM address to 127 (invalid)
-  USDX_POWERED_DOWN = B11111110, // Set DDRAM address to 126 (invalid)
+  USDX_POWERED_UP   = B01111111, // DDRAM address 127 (invalid)
+  USDX_POWERED_DOWN = B01111110, // DDRAM address 126 (invalid)
+  BUFFER_OVERFLOW   = B01111101, // DDRAM address 125 (invalid)
 };
 
-void sendControlMessage(ctrl_msg_t msg) {
-  // NOTE: If the nibble is [B3 B2 B1 B0], send byte [0 0 B3 RS 0 B2 B1 B0]
-  // NOTE: RS will always be 0 for a "set DDRAM address" command.
-  char cMsg = (char)msg;
-  char bits1 = ((B10000000 & cMsg)>>2) | ((B01110000 & cMsg)>>4); 
-  char bits2 = ((B00001000 & cMsg)<<2) | ((B00000111 & cMsg)<<0); 
-  Serial.write(bits1);
-  Serial.write(bits2);
+void sendUsdrEvent(ctrl_msg_t evt) { 
+  // Evts are coded as invalid "set DDRAM address" commands. The event is the address of the command.
+  // The command format is [RS=0 D7=1 D6=a6 D5=a5 D4=a4 D3=a3 D2=a2 D1=a1 D0=a0]
+  // So send two bytes: [0 0 0 RS=0 1 a6 a5 a4] and [0 0 0 RS=0 a3 a2 a1 a0] 
+  char addr = (char)evt;
+  char hiAddrNib = (B01110000 & addr) >> 4;
+  char loAddrNib = B00001111 & addr;
+  char hiByte = B00001000 + hiAddrNib;
+  char loByte = B00000000 + loAddrNib;
+  Serial.write(hiByte);
+  Serial.write(loByte);
 }
 
 
@@ -59,8 +64,8 @@ void usdxPowerDownISR() {
 void lcdActivityISR() {
   lcdBuffer[idxOfNextLcdWrite] = PORTD.IN;
   idxOfNextLcdWrite = (idxOfNextLcdWrite + 1) & BUFFER_INDEX_MASK;
-  if (idxOfNextLcdWrite == idxOfNextLcdRead) { // Buffer overflowed. Alert user by lighting LED.
-    digitalWrite(LED_BUILTIN, HIGH);  // REVIEW: is digitalWrite too slow for ISR?
+  if (idxOfNextLcdWrite == idxOfNextLcdRead) { // Buffer overflowed.
+    bufferOverflowed = true;
   }
 }
 
@@ -172,19 +177,18 @@ void performInputGesture(byte gesture) {
 }
 
 void doUsdxReset() {
-  digitalWrite(LED_BUILTIN, HIGH);
   detachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE));
 
   idxOfNextLcdRead = 0;
   idxOfNextLcdWrite = 0;
 
-  Button::startClick(Pin::USDX_RESET, LOW);
-  delay(1);
-  Button::endClick();
-  delay(1);
+  // NOT CURRENTLY SUPPORTED
+  // Button::startClick(Pin::USDX_RESET, LOW);
+  // delay(1);
+  // Button::endClick();
+  // delay(1);
 
   attachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE), lcdActivityISR, FALLING);
-  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void startPushToTalk() {
@@ -219,22 +223,20 @@ void setup() {
   // This is connected to an input pin on the uSDX, but we'll keep it hi-z except when pulling the uSDX pin low.
   pinMode(Pin::PUSH_TO_TALK,   INPUT);
 
+  // NOT CURRENTLY SUPPORTED
   // This is connected to the reset pin on the uSDX's 328. Pulse low to reset the 328.
-  pinMode(Pin::USDX_RESET,     OUTPUT);
-  digitalWrite(LED_BUILTIN,    LOW);
+  // pinMode(Pin::USDX_RESET,     OUTPUT);
 
-  // LED will be used to indicate 0) startup/reset, 1) waiting for power, and 2) buffer overflow.
+  // LED will be used to indicate startup  
   pinMode(LED_BUILTIN,         OUTPUT);
   digitalWrite(LED_BUILTIN,    LOW);
-
 
   // Port D will be used to read the LCD interface   
   PORTD.DIRCLR = B00000000; // Set the entire port to INPUT
 
   Serial.begin(500000);
 
-  // Flashing LED indicates startup or reset.
-  for (int i = 1; i < 10; i++) {
+  for (int i = 1; i < 10; i++) {  
     digitalWrite(LED_BUILTIN, HIGH);
     delay(50);
     digitalWrite(LED_BUILTIN, LOW);
@@ -248,15 +250,9 @@ void loop() {
   // The uSDX power *might* be on at this point, e.g. if the Nano has been manually reset.
   // If so, this waits for the uSDX to power up and then starts watching for lcd activity once the startup noise pass.
   if (digitalRead(Pin::LCD_POWER) == LOW) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    
     while (digitalRead(Pin::LCD_POWER) == LOW);
+    sendUsdrEvent(USDX_POWERED_UP);
     delay(100); // This skips noise from the startup.
-    
-    // Will indicate power UP by sending RS=0 DATA=11111111 (i.e. Set DDRAM address to 127, which is invalid)
-    sendControlMessage(USDX_POWERED_UP);
-
-    digitalWrite(LED_BUILTIN, LOW);
   }
   usdxPowerOn = true;
   attachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE), lcdActivityISR, FALLING);
@@ -267,6 +263,7 @@ void loop() {
 
     if (idxOfNextLcdRead != idxOfNextLcdWrite) {
       Serial.write(lcdBuffer[idxOfNextLcdRead]);
+      Serial.flush();
       idxOfNextLcdRead = (idxOfNextLcdRead + 1) & BUFFER_INDEX_MASK;
     }
 
@@ -288,6 +285,6 @@ void loop() {
   detachInterrupt(digitalPinToInterrupt(Pin::LCD_POWER));
   detachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE));
 
-  sendControlMessage(USDX_POWERED_DOWN);
+  sendUsdrEvent(USDX_POWERED_DOWN);
 
 }
