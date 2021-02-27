@@ -9,9 +9,15 @@ namespace Pin {
   const int RIGHT_BUTTON   =  3;
   const int LEFT_BUTTON    =  4;
   const int ENCODER_BUTTON =  5;
-  const int LCD_ENABLE     = 20; // This is used for EN clocking, i.e. to catch uSDX sending cmd/data to LCD.
-  const int LCD_POWER      =  6; // This will be used to detect uSDX power up and power down.
-  const int PUSH_TO_TALK   = 12; 
+  const int PUSH_TO_TALK   =  9;
+
+  const int LCD_RS         = 21; // PD5
+  const int LCD_ENABLE     = 20; // PD4
+  const int LCD_D7         = 14; // PD3
+  const int LCD_D6         = 15; // PD2
+  const int LCD_D5         = 16; // PD1
+  const int LCD_D4         = 17; // PD0
+
 }
 
 const unsigned long PULSE_DURATION = 5;  // milliseconds
@@ -24,7 +30,6 @@ enum gesture_t {
   ROTATE_ENCODER_COUNTERCLOCKWISE = 5,
   PUSH_TO_TALK_START              = 6,
   PUSH_TO_TALK_END                = 7,
-  RESET_THE_USDX                  = 8
 };
 
 volatile bool usdxPowerOn = false;
@@ -38,8 +43,8 @@ bool gestureInProgress = false;
 // Control messages are encoded as invalid "set DDRAM address" commands.
 // They are invalid because the address is out of range.
 enum ctrl_msg_t {
-  USDX_POWERED_UP   = B01111111, // DDRAM address 127 (invalid)
-  USDX_POWERED_DOWN = B01111110, // DDRAM address 126 (invalid)
+  //USDX_POWERED_UP   = B01111111, // DDRAM address 127 (invalid)
+  //USDX_POWERED_DOWN = B01111110, // DDRAM address 126 (invalid)
   BUFFER_OVERFLOW   = B01111101, // DDRAM address 125 (invalid)
 };
 
@@ -56,10 +61,6 @@ void sendUsdrEvent(ctrl_msg_t evt) {
   Serial.write(loByte);
 }
 
-
-void usdxPowerDownISR() {
-  usdxPowerOn = false;
-}
 
 void lcdActivityISR() {
   lcdBuffer[idxOfNextLcdWrite] = PORTD.IN;
@@ -172,23 +173,7 @@ void performInputGesture(byte gesture) {
     case ROTATE_ENCODER_COUNTERCLOCKWISE: Encoder::startRotation(Pin::ROT_B, Pin::ROT_A); break;
     case PUSH_TO_TALK_START: startPushToTalk(); break;
     case PUSH_TO_TALK_END: endPushToTalk(); break;
-    case RESET_THE_USDX: doUsdxReset(); break;
   }
-}
-
-void doUsdxReset() {
-  detachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE));
-
-  idxOfNextLcdRead = 0;
-  idxOfNextLcdWrite = 0;
-
-  // NOT CURRENTLY SUPPORTED
-  // Button::startClick(Pin::USDX_RESET, LOW);
-  // delay(1);
-  // Button::endClick();
-  // delay(1);
-
-  attachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE), lcdActivityISR, FALLING);
 }
 
 void startPushToTalk() {
@@ -213,29 +198,25 @@ void setup() {
   pinMode(Pin::ENCODER_BUTTON, INPUT);
   pinMode(Pin::ROT_A,          INPUT);
   pinMode(Pin::ROT_B,          INPUT);
-
-  // This goes low when the LCD bits are ready to be read.
-  pinMode(Pin::LCD_ENABLE,     INPUT_PULLUP  );
-  
-  // This will be high when uSDX is powered on.
-  pinMode(Pin::LCD_POWER,      INPUT_PULLDOWN);
-
-  // This is connected to an input pin on the uSDX, but we'll keep it hi-z except when pulling the uSDX pin low.
   pinMode(Pin::PUSH_TO_TALK,   INPUT);
 
-  // NOT CURRENTLY SUPPORTED
-  // This is connected to the reset pin on the uSDX's 328. Pulse low to reset the 328.
-  // pinMode(Pin::USDX_RESET,     OUTPUT);
+  // Port D pins:
+  pinMode(Pin::LCD_RS,         INPUT); // D5
+  pinMode(Pin::LCD_ENABLE,     INPUT); // D4
+  pinMode(Pin::LCD_D7,         INPUT); // D3
+  pinMode(Pin::LCD_D6,         INPUT); // D2
+  pinMode(Pin::LCD_D5,         INPUT); // D1
+  pinMode(Pin::LCD_D4,         INPUT); // D0
 
-  // LED will be used to indicate startup  
-  pinMode(LED_BUILTIN,         OUTPUT);
-  digitalWrite(LED_BUILTIN,    LOW);
+  idxOfNextLcdRead = 0;
+  idxOfNextLcdWrite = 0;
 
-  // Port D will be used to read the LCD interface   
-  PORTD.DIRCLR = B00000000; // Set the entire port to INPUT
+  attachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE), lcdActivityISR, FALLING);
 
   Serial.begin(500000);
 
+  // LED will be used to indicate startup  
+  pinMode(LED_BUILTIN, OUTPUT);
   for (int i = 1; i < 10; i++) {  
     digitalWrite(LED_BUILTIN, HIGH);
     delay(50);
@@ -247,44 +228,22 @@ void setup() {
 
 void loop() {
 
-  // The uSDX power *might* be on at this point, e.g. if the Nano has been manually reset.
-  // If so, this waits for the uSDX to power up and then starts watching for lcd activity once the startup noise pass.
-  if (digitalRead(Pin::LCD_POWER) == LOW) {
-    while (digitalRead(Pin::LCD_POWER) == LOW);
-    sendUsdrEvent(USDX_POWERED_UP);
-    delay(100); // This skips noise from the startup.
+  if (idxOfNextLcdRead != idxOfNextLcdWrite) {
+    Serial.write(lcdBuffer[idxOfNextLcdRead]);
+    idxOfNextLcdRead = (idxOfNextLcdRead + 1) & BUFFER_INDEX_MASK;
   }
-  usdxPowerOn = true;
-  attachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE), lcdActivityISR, FALLING);
-  attachInterrupt(digitalPinToInterrupt(Pin::LCD_POWER), usdxPowerDownISR, FALLING);
 
-  // The uSDX is powered on at this point, so do the normal workflow.
-  while (usdxPowerOn || idxOfNextLcdRead != idxOfNextLcdWrite) {  // Second condition allows for power off signal to be sent.
+  if (!gestureInProgress && Serial.available() > 0) {
+    byte gesture = Serial.read();
+    performInputGesture(gesture);
+  }
 
-    if (idxOfNextLcdRead != idxOfNextLcdWrite) {
-      Serial.write(lcdBuffer[idxOfNextLcdRead]);
-      Serial.flush();
-      idxOfNextLcdRead = (idxOfNextLcdRead + 1) & BUFFER_INDEX_MASK;
-    }
+  if (Button::clickInProgress()) {
+    Button::emulate();
+  }
 
-    if (!gestureInProgress && Serial.available() > 0) {
-      byte gesture = Serial.read();
-      performInputGesture(gesture);
-    }
-
-    if (Button::clickInProgress()) {
-      Button::emulate();
-    }
-
-    if (Encoder::rotationInProgress()) {
-      Encoder::emulate();
-    }
-  }  
-  // uSDX power has been turned off, at this point.
-
-  detachInterrupt(digitalPinToInterrupt(Pin::LCD_POWER));
-  detachInterrupt(digitalPinToInterrupt(Pin::LCD_ENABLE));
-
-  sendUsdrEvent(USDX_POWERED_DOWN);
+  if (Encoder::rotationInProgress()) {
+    Encoder::emulate();
+  }
 
 }
